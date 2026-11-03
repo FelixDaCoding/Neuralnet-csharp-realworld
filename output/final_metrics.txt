@@ -1,0 +1,25 @@
+==============================================================
+   PIMA INDIANS DIABETES - CUSTOM C# MLP FINAL EVALUATION     
+==============================================================
+Best Hyperparameters:
+  Learning Rate  : 0.05
+  Hidden Neurons : 8
+  Epochs         : 1000
+  Loss Function  : Binary Cross-Entropy (BCE)
+  Threshold      : 0.5
+
+Final Loss Values:
+  Final Train BCE Loss : 0.436023
+  Final Test BCE Loss  : 0.408768
+
+Confusion Matrix (Test Set):
+                        Predicted Negative (0)   Predicted Positive (1)
+  Actual Negative (0)   TN = 85                  FP = 15
+  Actual Positive (1)   FN = 14                  TP = 40
+
+Classification Metrics (Test Set):
+  Accuracy  : 0.8117 (81.17%)
+  Precision : 0.7273 (72.73%)
+  Recall    : 0.7407 (74.07%)
+  F1 Score  : 0.7339 (73.39%)
+==============================================================
