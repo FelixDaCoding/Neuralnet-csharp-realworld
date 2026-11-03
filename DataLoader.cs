@@ -8,7 +8,7 @@ namespace CsharpMlpDiabetesClassifier
 {
     /// <summary>
     /// Holds the preprocessed training and testing splits along with preprocessing statistics
-    /// (training-set medians, min/max values, and row counts) to ensure zero data leakage.
+    /// (training-set medians, min/max values, and row-level Raw/Cleaned/Scaled views) to ensure zero data leakage.
     /// </summary>
     public class DatasetSplit
     {
@@ -45,6 +45,21 @@ namespace CsharpMlpDiabetesClassifier
         /// <summary>Gets the number of malformed or empty rows skipped during CSV parsing.</summary>
         public int SkippedRowCount { get; }
 
+        /// <summary>Gets all raw feature rows in original CSV order (for the Data tab).</summary>
+        public List<double[]> AllRawFeatures { get; }
+
+        /// <summary>Gets all cleaned (zero-imputed) feature rows in original CSV order (for the Data tab).</summary>
+        public List<double[]> AllCleanedFeatures { get; }
+
+        /// <summary>Gets all scaled [0, 1] feature rows in original CSV order (for the Data tab).</summary>
+        public List<double[]> AllScaledFeatures { get; }
+
+        /// <summary>Gets all binary labels in original CSV order (for the Data tab).</summary>
+        public List<int> AllLabels { get; }
+
+        /// <summary>Gets whether each row in original CSV order belongs to the Training split (true) or Test split (false).</summary>
+        public bool[] RowIsTrain { get; }
+
         /// <summary>
         /// Initializes a new instance of the <see cref="DatasetSplit"/> class.
         /// </summary>
@@ -59,7 +74,12 @@ namespace CsharpMlpDiabetesClassifier
             double[] trainMin,
             double[] trainMax,
             int validRowCount,
-            int skippedRowCount)
+            int skippedRowCount,
+            List<double[]> allRawFeatures,
+            List<double[]> allCleanedFeatures,
+            List<double[]> allScaledFeatures,
+            List<int> allLabels,
+            bool[] rowIsTrain)
         {
             TrainFeatures = trainFeatures;
             TrainLabels = trainLabels;
@@ -72,6 +92,44 @@ namespace CsharpMlpDiabetesClassifier
             TrainMax = trainMax;
             ValidRowCount = validRowCount;
             SkippedRowCount = skippedRowCount;
+            AllRawFeatures = allRawFeatures;
+            AllCleanedFeatures = allCleanedFeatures;
+            AllScaledFeatures = allScaledFeatures;
+            AllLabels = allLabels;
+            RowIsTrain = rowIsTrain;
+        }
+
+        /// <summary>
+        /// Applies the training-set median imputation and Min-Max normalization to a single patient's raw 8 features.
+        /// </summary>
+        /// <param name="rawFeatures">Array of 8 raw clinical measurements.</param>
+        /// <returns>Normalized feature array in [0, 1].</returns>
+        public double[] NormalizeSinglePatient(double[] rawFeatures)
+        {
+            double[] result = new double[rawFeatures.Length];
+            for (int col = 0; col < rawFeatures.Length; col++)
+            {
+                double val = rawFeatures[col];
+                if (ImputedTrainingMedians.TryGetValue(col, out double median) && Math.Abs(val) < 1e-12 && median > 0.0)
+                {
+                    val = median;
+                }
+
+                double range = TrainMax[col] - TrainMin[col];
+                if (Math.Abs(range) < 1e-12)
+                {
+                    result[col] = 0.0;
+                }
+                else
+                {
+                    double scaled = (val - TrainMin[col]) / range;
+                    if (scaled < 0.0) scaled = 0.0;
+                    if (scaled > 1.0) scaled = 1.0;
+                    result[col] = scaled;
+                }
+            }
+
+            return result;
         }
     }
 
@@ -104,7 +162,7 @@ namespace CsharpMlpDiabetesClassifier
 
         /// <summary>
         /// Resolves a relative file path by checking the current working directory first
-        /// and then ascending parent directories if run from bin/Debug/net8.0.
+        /// and then ascending parent directories if run from bin/Debug or bin/Release.
         /// </summary>
         /// <param name="relativePath">Relative path such as "data/diabetes.csv".</param>
         /// <returns>Resolved relative path.</returns>
@@ -130,15 +188,22 @@ namespace CsharpMlpDiabetesClassifier
         }
 
         /// <summary>
-        /// Loads the Pima Indians Diabetes CSV file, performs a seeded stratified 80/20 train/test split,
+        /// Loads the Pima Indians Diabetes CSV file, performs a seeded 80/20 train/test split,
         /// imputes missing zeros using medians from the training set only, and applies Min-Max scaling
         /// to [0, 1] using min/max bounds from the training set only.
         /// </summary>
         /// <param name="csvRelativePath">Relative path to the CSV file (e.g., "data/diabetes.csv").</param>
         /// <param name="trainRatio">Proportion of data used for training (default 0.80).</param>
         /// <param name="seed">Fixed random seed for deterministic shuffling (default 42).</param>
+        /// <param name="stratified">Whether to preserve exact class proportions in train/test splits.</param>
+        /// <param name="imputeZeros">Whether to replace 0s in Glucose, BP, SkinThickness, Insulin, BMI with training medians.</param>
         /// <returns>A <see cref="DatasetSplit"/> containing normalized train/test data and metadata.</returns>
-        public static DatasetSplit LoadAndPreprocess(string csvRelativePath, double trainRatio = 0.80, int seed = 42)
+        public static DatasetSplit LoadAndPreprocess(
+            string csvRelativePath,
+            double trainRatio = 0.80,
+            int seed = 42,
+            bool stratified = true,
+            bool imputeZeros = true)
         {
             string resolvedPath = ResolveRelativePath(csvRelativePath);
             if (!File.Exists(resolvedPath))
@@ -155,7 +220,6 @@ namespace CsharpMlpDiabetesClassifier
                 throw new InvalidDataException($"The dataset file '{resolvedPath}' contains no data rows.");
             }
 
-            // Parse header names if present
             string[] headerParts = lines[0].Split(',');
             string[] featureNames = DefaultFeatureNames;
             if (headerParts.Length == 9)
@@ -163,10 +227,9 @@ namespace CsharpMlpDiabetesClassifier
                 featureNames = headerParts.Take(8).Select(h => h.Trim()).ToArray();
             }
 
-            List<(double[] Features, int Label)> allRecords = new List<(double[] Features, int Label)>();
+            List<(int RowIndex, double[] Features, int Label)> allRecords = new List<(int RowIndex, double[] Features, int Label)>();
             int skippedRows = 0;
 
-            // Parse CSV rows manually (skipping line 0 header)
             for (int lineIdx = 1; lineIdx < lines.Length; lineIdx++)
             {
                 string rawLine = lines[lineIdx].Trim();
@@ -206,7 +269,6 @@ namespace CsharpMlpDiabetesClassifier
                 if (!int.TryParse(tokens[8].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int label)
                     || (label != 0 && label != 1))
                 {
-                    // Also handle "0.0" or "1.0" formatted labels safely
                     if (double.TryParse(tokens[8].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double dLabel)
                         && (Math.Abs(dLabel - 0.0) < 1e-9 || Math.Abs(dLabel - 1.0) < 1e-9))
                     {
@@ -219,7 +281,7 @@ namespace CsharpMlpDiabetesClassifier
                     }
                 }
 
-                allRecords.Add((features, label));
+                allRecords.Add((allRecords.Count, features, label));
             }
 
             if (allRecords.Count == 0)
@@ -227,28 +289,47 @@ namespace CsharpMlpDiabetesClassifier
                 throw new InvalidDataException("No valid records were parsed from the CSV file.");
             }
 
-            // Step 1: Stratified 80/20 split after shuffling with fixed random seed
+            List<double[]> allRawFeatures = allRecords.Select(r => (double[])r.Features.Clone()).ToList();
+            List<int> allLabels = allRecords.Select(r => r.Label).ToList();
+            bool[] rowIsTrain = new bool[allRecords.Count];
+
+            // Step 1: Stratified or Random 80/20 split after shuffling with fixed random seed
             Random rng = new Random(seed);
-            List<(double[] Features, int Label)> class0 = allRecords.Where(r => r.Label == 0).ToList();
-            List<(double[] Features, int Label)> class1 = allRecords.Where(r => r.Label == 1).ToList();
+            List<(int RowIndex, double[] Features, int Label)> trainRecords = new List<(int RowIndex, double[] Features, int Label)>();
+            List<(int RowIndex, double[] Features, int Label)> testRecords = new List<(int RowIndex, double[] Features, int Label)>();
 
-            ShuffleInPlace(class0, rng);
-            ShuffleInPlace(class1, rng);
+            if (stratified)
+            {
+                List<(int RowIndex, double[] Features, int Label)> class0 = allRecords.Where(r => r.Label == 0).ToList();
+                List<(int RowIndex, double[] Features, int Label)> class1 = allRecords.Where(r => r.Label == 1).ToList();
 
-            int trainCount0 = (int)Math.Round(class0.Count * trainRatio);
-            int trainCount1 = (int)Math.Round(class1.Count * trainRatio);
+                ShuffleInPlace(class0, rng);
+                ShuffleInPlace(class1, rng);
 
-            List<(double[] Features, int Label)> trainRecords = new List<(double[] Features, int Label)>();
-            List<(double[] Features, int Label)> testRecords = new List<(double[] Features, int Label)>();
+                int trainCount0 = (int)Math.Round(class0.Count * trainRatio);
+                int trainCount1 = (int)Math.Round(class1.Count * trainRatio);
 
-            trainRecords.AddRange(class0.Take(trainCount0));
-            trainRecords.AddRange(class1.Take(trainCount1));
-            testRecords.AddRange(class0.Skip(trainCount0));
-            testRecords.AddRange(class1.Skip(trainCount1));
+                trainRecords.AddRange(class0.Take(trainCount0));
+                trainRecords.AddRange(class1.Take(trainCount1));
+                testRecords.AddRange(class0.Skip(trainCount0));
+                testRecords.AddRange(class1.Skip(trainCount1));
 
-            // Shuffle combined train and test splits so classes are interleaved
-            ShuffleInPlace(trainRecords, rng);
-            ShuffleInPlace(testRecords, rng);
+                ShuffleInPlace(trainRecords, rng);
+                ShuffleInPlace(testRecords, rng);
+            }
+            else
+            {
+                List<(int RowIndex, double[] Features, int Label)> shuffled = allRecords.ToList();
+                ShuffleInPlace(shuffled, rng);
+                int trainCount = (int)Math.Round(shuffled.Count * trainRatio);
+                trainRecords.AddRange(shuffled.Take(trainCount));
+                testRecords.AddRange(shuffled.Skip(trainCount));
+            }
+
+            foreach (var tr in trainRecords)
+            {
+                rowIsTrain[tr.RowIndex] = true;
+            }
 
             List<double[]> trainFeatures = trainRecords.Select(r => (double[])r.Features.Clone()).ToList();
             List<int> trainLabels = trainRecords.Select(r => r.Label).ToList();
@@ -271,25 +352,45 @@ namespace CsharpMlpDiabetesClassifier
                 trainingMedians[col] = median;
 
                 int replacedCount = 0;
-                for (int i = 0; i < trainFeatures.Count; i++)
+                if (imputeZeros)
                 {
-                    if (Math.Abs(trainFeatures[i][col]) < 1e-12)
+                    for (int i = 0; i < trainFeatures.Count; i++)
                     {
-                        trainFeatures[i][col] = median;
-                        replacedCount++;
+                        if (Math.Abs(trainFeatures[i][col]) < 1e-12)
+                        {
+                            trainFeatures[i][col] = median;
+                            replacedCount++;
+                        }
                     }
-                }
 
-                for (int i = 0; i < testFeatures.Count; i++)
-                {
-                    if (Math.Abs(testFeatures[i][col]) < 1e-12)
+                    for (int i = 0; i < testFeatures.Count; i++)
                     {
-                        testFeatures[i][col] = median;
-                        replacedCount++;
+                        if (Math.Abs(testFeatures[i][col]) < 1e-12)
+                        {
+                            testFeatures[i][col] = median;
+                            replacedCount++;
+                        }
                     }
                 }
 
                 zeroCountsReplaced[col] = replacedCount;
+            }
+
+            // Prepare AllCleanedFeatures in original CSV order
+            List<double[]> allCleanedFeatures = allRawFeatures.Select(r => (double[])r.Clone()).ToList();
+            if (imputeZeros)
+            {
+                foreach (int col in ZeroImputeColumns)
+                {
+                    double median = trainingMedians[col];
+                    for (int i = 0; i < allCleanedFeatures.Count; i++)
+                    {
+                        if (Math.Abs(allCleanedFeatures[i][col]) < 1e-12)
+                        {
+                            allCleanedFeatures[i][col] = median;
+                        }
+                    }
+                }
             }
 
             // Step 3: Compute Min and Max per feature column from the imputed TRAINING SET ONLY
@@ -313,9 +414,12 @@ namespace CsharpMlpDiabetesClassifier
                 trainMax[col] = maxVal;
             }
 
-            // Step 4: Apply Min-Max scaling to [0, 1] on both training and testing sets using training bounds
+            // Step 4: Apply Min-Max scaling to [0, 1] on training, testing, and all-rows views using training bounds
             ApplyMinMaxScaling(trainFeatures, trainMin, trainMax);
             ApplyMinMaxScaling(testFeatures, trainMin, trainMax);
+
+            List<double[]> allScaledFeatures = allCleanedFeatures.Select(r => (double[])r.Clone()).ToList();
+            ApplyMinMaxScaling(allScaledFeatures, trainMin, trainMax);
 
             return new DatasetSplit(
                 trainFeatures,
@@ -328,12 +432,14 @@ namespace CsharpMlpDiabetesClassifier
                 trainMin,
                 trainMax,
                 allRecords.Count,
-                skippedRows);
+                skippedRows,
+                allRawFeatures,
+                allCleanedFeatures,
+                allScaledFeatures,
+                allLabels,
+                rowIsTrain);
         }
 
-        /// <summary>
-        /// Performs a Fisher-Yates shuffle in-place using the provided random number generator.
-        /// </summary>
         private static void ShuffleInPlace<T>(IList<T> list, Random rng)
         {
             for (int i = list.Count - 1; i > 0; i--)
@@ -345,9 +451,6 @@ namespace CsharpMlpDiabetesClassifier
             }
         }
 
-        /// <summary>
-        /// Computes the median value of a pre-sorted list of numbers.
-        /// </summary>
         private static double ComputeMedianFromSorted(IReadOnlyList<double> sortedValues)
         {
             if (sortedValues.Count == 0)
@@ -364,9 +467,6 @@ namespace CsharpMlpDiabetesClassifier
             return (sortedValues[mid - 1] + sortedValues[mid]) / 2.0;
         }
 
-        /// <summary>
-        /// Scales each feature column in-place using (x - trainMin) / (trainMax - trainMin).
-        /// </summary>
         private static void ApplyMinMaxScaling(List<double[]> rows, double[] trainMin, double[] trainMax)
         {
             for (int i = 0; i < rows.Count; i++)

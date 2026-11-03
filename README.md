@@ -90,8 +90,9 @@ csharp-mlp-diabetes-classifier/
 ├── DataLoader.cs                         # Manual CSV parser, stratified split, median imputation, Min-Max scaling
 ├── Metrics.cs                            # Confusion matrix (TP, TN, FP, FN), Accuracy, Precision, Recall, F1
 ├── ExperimentRunner.cs                   # Grid search runner, model trainer, and CSV logger
-├── Program.cs                            # Main entry point orchestrating the pipeline
-├── csharp-mlp-diabetes-classifier.csproj # .NET 8 C# console project file
+├── MainForm.cs                           # Interactive Windows Forms Clinical Predictor GUI dashboard
+├── Program.cs                            # Main entry point (launches GUI by default, or CLI mode with --cli)
+├── csharp-mlp-diabetes-classifier.csproj # .NET 8 Windows Forms & CLI C# project file
 ├── .gitignore                            # Standard C#/.NET gitignore
 └── README.md                             # Project documentation and experimental analysis
 ```
@@ -100,14 +101,17 @@ csharp-mlp-diabetes-classifier/
 
 ## How to Build and Run
 
-Ensure the .NET SDK (`.NET 8.0` or newer) is installed, then run the following commands from the project root directory:
+Ensure the .NET SDK (`.NET 8.0` or newer on Windows) is installed, then run the following commands from the project root directory:
 
 ```bash
 # Build the project in Release configuration
 dotnet build -c Release
 
-# Run the full pipeline (preprocessing, 48-run grid search, best model retraining, and evaluation)
+# Launch the interactive Windows Forms Clinical Predictor GUI Dashboard
 dotnet run -c Release
+
+# (Optional) Run the headless CLI batch pipeline (48-run grid search + retraining)
+dotnet run -c Release -- --cli
 ```
 
 Running the program automatically generates/updates:
@@ -232,3 +236,4 @@ In clinical screening for diabetes:
 - **Extensive Missing Insulin & SkinThickness Data**: Nearly half (`374 / 768 = 48.7%`) of `Insulin` values and `227 / 768 = 29.6%` of `SkinThickness` values were originally zero and imputed with the training median. Using k-Nearest Neighbors (k-NN) or multivariate regression imputation computed on the training split could preserve richer inter-feature correlations.
 - **Decision Threshold Tuning**: Rather than fixing the sigmoid classification threshold at `0.5`, lowering the decision threshold (e.g., to `0.35–0.40`) on a validation split could boost clinical **Recall** above `85%` at the expense of a modest drop in precision.
 - **Regularization & Learning Rate Schedules**: Adding L2 weight decay, mini-batch gradient descent with shuffling per epoch, or learning rate decay would prevent the late-epoch overfitting seen at `2000` epochs.
+

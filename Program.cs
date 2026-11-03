@@ -2,21 +2,41 @@ using System;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Windows.Forms;
 
 namespace CsharpMlpDiabetesClassifier
 {
     /// <summary>
     /// Entry point for the Real-World Pima Indians Diabetes Binary Classification project
     /// using the custom C# 3-layer Multi-Layer Perceptron (backneural).
+    /// Launches the interactive Windows Forms GUI by default, or runs in CLI mode if "--cli" is passed.
     /// </summary>
     public static class Program
     {
         /// <summary>
-        /// Orchestrates data loading, preprocessing, hyperparameter experiments, final retraining,
-        /// and evaluation report generation.
+        /// Main entry point. Launches the Windows Forms GUI or runs the CLI batch pipeline.
         /// </summary>
-        /// <param name="args">Command-line arguments (optional).</param>
+        /// <param name="args">Command-line arguments. Pass "--cli" for console-only batch execution.</param>
+        [STAThread]
         public static void Main(string[] args)
+        {
+            if (args != null && args.Any(a => string.Equals(a, "--cli", StringComparison.OrdinalIgnoreCase)))
+            {
+                RunCliPipeline();
+                return;
+            }
+
+            Application.SetHighDpiMode(HighDpiMode.SystemAware);
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            Application.Run(new MainForm());
+        }
+
+        /// <summary>
+        /// Runs the headless batch pipeline (data loading, preprocessing, 48-run grid search,
+        /// best model retraining, and saving output files).
+        /// </summary>
+        public static void RunCliPipeline()
         {
             const int randomSeed = 42;
             string datasetPath = Path.Combine("data", "diabetes.csv");
@@ -30,7 +50,6 @@ namespace CsharpMlpDiabetesClassifier
             Console.WriteLine("==============================================================");
             Console.WriteLine();
 
-            // 1. Load and preprocess dataset (training-only median imputation and Min-Max scaling)
             DatasetSplit split = DataLoader.LoadAndPreprocess(datasetPath, trainRatio: 0.80, seed: randomSeed);
 
             int trainPos = split.TrainLabels.Count(l => l == 1);
@@ -43,39 +62,11 @@ namespace CsharpMlpDiabetesClassifier
             Console.WriteLine($"  Training Set (80%) : {split.TrainFeatures.Count} rows (Class 0: {trainNeg}, Class 1: {trainPos})");
             Console.WriteLine($"  Test Set     (20%) : {split.TestFeatures.Count} rows (Class 0: {testNeg}, Class 1: {testPos})");
             Console.WriteLine();
-            Console.WriteLine("Zero-Value Imputation (Medians Computed from Training Set Only):");
-            foreach (int col in DataLoader.ZeroImputeColumns)
-            {
-                string colName = split.FeatureNames[col];
-                double median = split.ImputedTrainingMedians[col];
-                int replaced = split.ZeroCountsReplaced[col];
-                Console.WriteLine(string.Format(
-                    CultureInfo.InvariantCulture,
-                    "  {0,-15} -> Training Median: {1,7:F2} (Zeros imputed across dataset: {2})",
-                    colName,
-                    median,
-                    replaced));
-            }
-            Console.WriteLine();
 
-            Console.WriteLine("Min-Max Normalization Bounds (Computed from Imputed Training Set Only):");
-            for (int col = 0; col < split.FeatureNames.Length; col++)
-            {
-                Console.WriteLine(string.Format(
-                    CultureInfo.InvariantCulture,
-                    "  {0,-24} : Min = {1,7:F3}, Max = {2,7:F3} -> Scaled to [0, 1]",
-                    split.FeatureNames[col],
-                    split.TrainMin[col],
-                    split.TrainMax[col]));
-            }
-            Console.WriteLine();
-
-            // 2. Define hyperparameter search space
             double[] learningRates = { 0.01, 0.05, 0.1, 0.5 };
             int[] hiddenNeuronSizes = { 4, 8, 16, 32 };
             int[] epochCounts = { 500, 1000, 2000 };
 
-            // 3. Run systematic hyperparameter experiments, retrain best model, and save outputs
             ExperimentRunner.RunGridSearchAndRetrainBest(
                 split,
                 learningRates,
@@ -85,12 +76,6 @@ namespace CsharpMlpDiabetesClassifier
                 trainingLogCsvPath,
                 finalMetricsTxtPath,
                 seed: randomSeed);
-
-            Console.WriteLine("All output artifacts saved successfully:");
-            Console.WriteLine($"  - {experimentsCsvPath}");
-            Console.WriteLine($"  - {trainingLogCsvPath}");
-            Console.WriteLine($"  - {finalMetricsTxtPath}");
         }
     }
 }
-

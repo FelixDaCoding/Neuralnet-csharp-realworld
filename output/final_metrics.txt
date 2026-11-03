@@ -4,7 +4,7 @@
 Best Hyperparameters:
   Learning Rate  : 0.05
   Hidden Neurons : 8
-  Epochs         : 1000
+  Epochs         : 1001
   Loss Function  : Binary Cross-Entropy (BCE)
   Threshold      : 0.5
 

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 
 namespace backneural
 {
@@ -21,9 +20,19 @@ namespace backneural
         public double LearningRate => this.learningRate;
 
         /// <summary>
+        /// Gets the number of input layer neurons.
+        /// </summary>
+        public int InputCount => this.ilayer.Length;
+
+        /// <summary>
         /// Gets the number of hidden layer neurons.
         /// </summary>
         public int HiddenCount => this.hlayer.Length;
+
+        /// <summary>
+        /// Gets the number of output layer neurons.
+        /// </summary>
+        public int OutputCount => this.olayer.Length;
 
         /// <summary>
         /// Initializes a new 3-layer MLP with default 8 inputs, 8 hidden neurons, and 1 output neuron.
@@ -205,7 +214,6 @@ namespace backneural
             for (int i = 0; i < features.Count; i++)
             {
                 double yHat = this.PredictProbability(features[i]);
-                // Clamp prediction to [epsilon, 1 - epsilon] to prevent log(0)
                 if (yHat < epsilon) yHat = epsilon;
                 if (yHat > 1.0 - epsilon) yHat = 1.0 - epsilon;
 
@@ -214,6 +222,31 @@ namespace backneural
             }
 
             return totalLoss / features.Count;
+        }
+
+        /// <summary>
+        /// Computes the Mean Squared Error (MSE) over a dataset:
+        /// MSE = (1/N) * sum( (y - y_hat)^2 )
+        /// </summary>
+        /// <param name="features">List of feature vectors.</param>
+        /// <param name="labels">List of binary labels (0 or 1).</param>
+        /// <returns>Mean Squared Error.</returns>
+        public double ComputeMeanSquaredErrorLoss(IReadOnlyList<double[]> features, IReadOnlyList<int> labels)
+        {
+            if (features.Count == 0)
+            {
+                return 0.0;
+            }
+
+            double totalMse = 0.0;
+            for (int i = 0; i < features.Count; i++)
+            {
+                double yHat = this.PredictProbability(features[i]);
+                double diff = labels[i] - yHat;
+                totalMse += diff * diff;
+            }
+
+            return totalMse / features.Count;
         }
     }
 }
